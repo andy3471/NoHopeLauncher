@@ -34,8 +34,12 @@ import lombok.extern.java.Log;
 import javax.swing.*;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.logging.Level;
 
@@ -78,6 +82,9 @@ public abstract class BaseUpdater {
         final File logPath = new File(instance.getDir(), "install_log.json");
         final File cachePath = new File(instance.getDir(), "update_cache.json");
         final File featuresPath = new File(instance.getDir(), "features.json");
+
+        // Make sure the temp dir exists
+        installer.getTempDir().mkdirs();
 
         final InstallLog previousLog = Persistence.read(logPath, InstallLog.class);
         final InstallLog currentLog = new InstallLog();
@@ -274,18 +281,28 @@ public abstract class BaseUpdater {
             }
         }
 
-        // Fetch logging config
+        // Use our custom logging config depending on what the manifest specifies
         if (versionManifest.getLogging() != null) {
             VersionManifest.LoggingConfig config = versionManifest.getLogging().getClient();
 
             VersionManifest.Artifact file = config.getFile();
             File targetFile = new File(librariesDir, file.getId());
+            InputStream embeddedConfig = Launcher.class.getResourceAsStream("logging/" + file.getId());
 
-            if (!targetFile.exists() || !Objects.equals(config.getFile().getHash(), FileUtils.getShaHash(targetFile))) {
+            if (embeddedConfig == null) {
+                // No embedded config, just use whatever the server gives us
                 File tempFile = installer.getDownloader().download(url(file.getUrl()), file.getHash(), file.getSize(), file.getId());
 
                 log.info("Downloading logging config " + file.getId() + " from " + file.getUrl());
                 installer.queue(new FileMover(tempFile, targetFile));
+            } else if (!targetFile.exists() || FileUtils.getShaHash(targetFile).equals(file.getHash())) {
+                // Use our embedded replacement
+
+                Path tempFile = installer.getTempDir().toPath().resolve(file.getId());
+                Files.copy(embeddedConfig, tempFile, StandardCopyOption.REPLACE_EXISTING);
+
+                log.info("Substituting embedded logging config " + file.getId());
+                installer.queue(new FileMover(tempFile.toFile(), targetFile));
             }
         }
     }
